@@ -191,9 +191,16 @@ def eval(pipeline, text, tokenizer, text_encoder, img_cond, img_cond_mask, img_e
 
 def load_primary_models(pretrained_model_path, eval=False):
     if eval:
-        pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path, torch_dtype=torch.float16)
+        pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path, torch_dtype=torch.float16, variant='fp16')
     else:
         pipeline = StableVideoDiffusionPipeline.from_pretrained(pretrained_model_path)
+    
+    # LoRA 모델인지 확인하고 로드
+    if os.path.exists(os.path.join(pretrained_model_path, "adapter_config.json")):
+        print("Loading LoRA model...")
+        from peft import PeftModel
+        pipeline.unet = PeftModel.from_pretrained(pipeline.unet, pretrained_model_path)
+    
     return pipeline, pipeline.vae, pipeline.unet
 
 def main_eval(
@@ -204,8 +211,25 @@ def main_eval(
 ):
     if seed is not None:
         set_seed(seed)
-    # Load scheduler, tokenizer and models.
-    pipeline, _, _ = load_primary_models(pretrained_model_path, eval=True)
+    
+    # LoRA 모델인지 확인 (adapter_config.json이 있거나 unet 폴더가 없으면 LoRA)
+    is_lora = (os.path.exists(os.path.join(pretrained_model_path, "adapter_config.json")) or 
+               not os.path.exists(os.path.join(pretrained_model_path, "unet")))
+    
+    if is_lora:
+        print("Detected LoRA checkpoint, loading with base model...")
+        # 원본 모델 + LoRA 어댑터 조합
+        base_model_path = "/shared/s2/lab01/youngjoonjeong/stable_diffusion/svd-robot"
+        pipeline = StableVideoDiffusionPipeline.from_pretrained(
+            base_model_path, 
+            torch_dtype=torch.float16,
+            variant='fp16'
+        )
+        from peft import PeftModel
+        pipeline.unet = PeftModel.from_pretrained(pipeline.unet, pretrained_model_path)
+    else:
+        # 일반 모델 로드
+        pipeline, _, _ = load_primary_models(pretrained_model_path, eval=True)
     device = torch.device("cuda")
     pipeline.to(device)
     from transformers import AutoTokenizer, CLIPTextModelWithProjection

@@ -207,6 +207,8 @@ class Dataset_mix(Dataset):
             episode_id = label['episode_id']
             if 'xbot' in video_dir:
                 video_path = f"latent_videos/{self.mode}/{episode_id}/{cam_id}.pt"
+            elif 'libero' in video_dir:
+                video_path = f"latent_videos/{self.mode}/{episode_id}/{cam_id}.pt"
             else:
                 video_path = label['latent_videos'][cam_id]['latent_video_path']
             try:
@@ -260,6 +262,10 @@ class Dataset_mix(Dataset):
             cond_cam_id = int(1-cam_id)
         elif 'xbot_04' in ann_file:
             cam_id = np.random.choice([0,1,2], p=[0.5,0.25,0.25])
+        elif 'libero' in ann_file:
+            # Libero에서 0.pt와 1.pt 둘 다 사용 (75% 0, 25% 1)
+            cam_id = np.random.choice([0,1], p=[0.5,0.5])
+            cond_cam_id = int(1-cam_id)
         else:
             cam_id = 0
             cond_cam_id = 0
@@ -271,6 +277,10 @@ class Dataset_mix(Dataset):
         if self.args.use_img_cond:
             # load the image condition
             if 'calvin' in ann_file or 'xhand' in ann_file:
+                img_cond, cam_id = self._get_obs(label, frame_ids, cond_cam_id, pre_encode=False, video_dir=sampled_video_dir, use_img_cond=True)
+                mask = False
+            elif 'libero' in ann_file:
+                # Libero에서도 cond_cam_id 사용
                 img_cond, cam_id = self._get_obs(label, frame_ids, cond_cam_id, pre_encode=False, video_dir=sampled_video_dir, use_img_cond=True)
                 mask = False
             else:

@@ -2,7 +2,7 @@
 train_args:
   ########### debug/lora ################
   debug: False
-  use_lora: True
+  use_lora: False
   lora_model_path: null
   lora_rank: 16
   ######### wandb args ##################
@@ -18,14 +18,14 @@ train_args:
 
   ############ dataset args###############
   annotation_name: 'annotation' # annotation dirname under dataset_dir path
-  dataset_dir: "/shared/s2/lab01/dataset/vpp/vpp_svd_latent/opensource_robotdata"
+  dataset_dir: "/shared/s2/lab01/youngjoonjeong/vpp"
 
   # dataset: 'sthv2+bridge+rt1+calvin'
   # prob: [0.4,0.2,0.2,0.2]
 
   # dataset: 'sthv2+bridge+rt1+calvin'
-  dataset: 'bridge+calvin'
-  prob: [0.5,0.5]
+  dataset: 'libero'
+  prob: [1.0]
 
   tie_weight: True
   normalize: True
@@ -47,7 +47,7 @@ train_args:
   width: 256
   height: 256
   # Whether or not to sample preview during training (Requires more VRAM).
-  sample_preview: False
+  sample_preview: True
   # Number of inference steps when generating the video.
   num_inference_steps: 30
   # CFG scale
@@ -64,7 +64,7 @@ train_args:
  
 # Pretrained diffusers model path.
 #pretrained_model_path: "output/latent/train_mask_motion" #https://huggingface.co/damo-vilab/text-to-video-ms-1.7b/tree/main
-pretrained_model_path: "/shared/s2/lab01/youngjoonjeong/stable_diffusion/stable-video-diffusion-img2vid"
+pretrained_model_path: "/shared/s2/lab01/youngjoonjeong/stable_diffusion/svd-robot"
 # gradient_accumulation_steps: 2
 
 
@@ -105,7 +105,7 @@ extend_dataset: False
 # Caches the latents (Frames-Image -> VAE -> Latent) to a HDD or SDD. 
 # The latents will be saved under your training folder, and loaded automatically for training.
 # This both saves memory and speeds up training and takes very little disk space.
-cache_latents: True
+cache_latents: False
 
 # If you have cached latents set to `True` and have a directory of cached latents,
 # you can skip the caching process and load previously saved ones. 
@@ -192,14 +192,14 @@ train_batch_size: 1
 max_train_steps: 500000
 
 # Saves a model every nth step.
-checkpointing_steps: 20000
+checkpointing_steps: 10000
 
 # How many steps to do for validation if sample_preview is enabled.
-validation_steps: 2000
+validation_steps: 1000
 
 # Which modules we want to unfreeze for the UNET. Advanced usage.
 trainable_modules:
-  # - "all"
+  - "all"
   # If you want to ignore temporal attention entirely, remove "attn1-2" and replace with ".attentions"
   # This is for self attetion. Activates for spatial and temporal dimensions if n_sample_frames > 1
   - "attn1"

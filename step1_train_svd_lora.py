@@ -614,7 +614,7 @@ def main(
     for p in unet.parameters():
         p.requires_grad_(False)
 
-    inserted = 0
+    '''inserted = 0
     for blk_name, blk in unet.named_modules():
         if hasattr(blk, "attn2"):                      # Cross-Attention
             attn = blk.attn2
@@ -625,7 +625,7 @@ def main(
             
             # temporal - spatial 구분 없이 
             
-            '''
+            
             (attn2): Attention(
                 (to_q): Linear(in_features=320, out_features=320, bias=False)
                 (to_k): Linear(in_features=1024, out_features=320, bias=False)
@@ -634,7 +634,7 @@ def main(
                     (0): Linear(in_features=320, out_features=320, bias=True)
                     (1): Dropout(p=0.0, inplace=False)
                 )
-            '''
+            
             RANK = 16
             lora_proc = LoRAAttnProcessor(hidden_size=hidden, rank=RANK)
 
@@ -649,10 +649,15 @@ def main(
             inserted += 1
 
     print(f"✔  LoRA inserted into {inserted} Cross-Attention modules")
-
-    # 학습 대상 = LoRA 행렬
     lora_params = [p for n, p in unet.named_parameters() if "lora" in n.lower()]
     print("trainable LoRA params :", sum(p.numel() for p in lora_params))
+    '''
+    RANK = 16
+    unet.add_lora_attn_processor(rank=RANK)
+    lora_params = [p for n, p in unet.named_parameters() if ".lora_" in n and p.requires_grad]
+    print("LoRA trainable params:", sum(p.numel() for p in lora_params))
+    # 학습 대상 = LoRA 행렬
+    
     
     #################################################################################
     # if use lora, prepare lora model

@@ -56,7 +56,20 @@ for blk_name, blk in pipe.unet.named_modules():
 
         # Q-proj 차원
         q_proj = getattr(attn, "to_q", None) or getattr(attn, "q_proj", None)
-        hidden = q_proj.in_features
+        hidden = q_proj.in_features # 입력을 차원을 받아오기 위함! 학습은 k q c out 다 해당함 
+        
+        # temporal - spatial 구분 없이 
+        
+        '''
+        (attn2): Attention(
+              (to_q): Linear(in_features=320, out_features=320, bias=False)
+              (to_k): Linear(in_features=1024, out_features=320, bias=False)
+              (to_v): Linear(in_features=1024, out_features=320, bias=False)
+              (to_out): ModuleList(
+                (0): Linear(in_features=320, out_features=320, bias=True)
+                (1): Dropout(p=0.0, inplace=False)
+              )
+        '''
     
         lora_proc = LoRAAttnProcessor(hidden_size=hidden, rank=RANK)
 

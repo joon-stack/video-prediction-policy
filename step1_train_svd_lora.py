@@ -439,43 +439,46 @@ def finetune_unet(batch, accelerator, pipeline, unet, tokenizer, text_encoder, i
 
 
     condition_latent = repeat(image_latent, 'b c h w->b f c h w',f=num_frames)
-    
+    img_cond = batch['img_cond'] if args.use_img_cond else None
+    img_cond_mask = batch['img_cond_mask'] if args.use_img_cond else None
     # clip text encoder output: encoder_hidden_states
     with torch.no_grad():
-        img_cond = batch['img_cond'] if args.use_img_cond else None
-        img_cond_mask = batch['img_cond_mask'] if args.use_img_cond else None
+        
         encoder_hidden_states = encode_text(texts, tokenizer, text_encoder, img_cond, img_cond_mask, image_encoder, position_encode=args.position_encode, use_clip='clip' in args.clip_model_path, args=args)
         # for classifier-free guidance
+    with torch.enable_grad(): 
+        
         uncond_hidden_states = torch.zeros_like(encoder_hidden_states)
         text_mask = (torch.rand(encoder_hidden_states.shape[0], device=device)>0.05).unsqueeze(1).unsqueeze(2)
 
         encoder_hidden_states = encoder_hidden_states*text_mask+uncond_hidden_states*(~text_mask)
+  
+        # Add noise to the latents according to the noise magnitude at each timestep
+        # (this is the forward diffusion process) #[bsz, f, c, h , w]
+        rnd_normal = torch.randn([bsz, 1, 1, 1, 1], device=device)
+        sigma = (rnd_normal * P_std + P_mean).exp()
+        c_skip = 1 / (sigma**2 + 1)
+        c_out =  -sigma / (sigma**2 + 1) ** 0.5
+        c_in = 1 / (sigma**2 + 1) ** 0.5
+        c_noise = (sigma.log() / 4).reshape([bsz])
+        loss_weight = (sigma ** 2 + 1) / sigma ** 2
 
-    # Add noise to the latents according to the noise magnitude at each timestep
-    # (this is the forward diffusion process) #[bsz, f, c, h , w]
-    rnd_normal = torch.randn([bsz, 1, 1, 1, 1], device=device)
-    sigma = (rnd_normal * P_std + P_mean).exp()
-    c_skip = 1 / (sigma**2 + 1)
-    c_out =  -sigma / (sigma**2 + 1) ** 0.5
-    c_in = 1 / (sigma**2 + 1) ** 0.5
-    c_noise = (sigma.log() / 4).reshape([bsz])
-    loss_weight = (sigma ** 2 + 1) / sigma ** 2
+        noisy_latents = latents + torch.randn_like(latents) * sigma
+        input_latents = torch.cat([c_in * noisy_latents, condition_latent/vae.config.scaling_factor], dim=2)
 
-    noisy_latents = latents + torch.randn_like(latents) * sigma
-    input_latents = torch.cat([c_in * noisy_latents, condition_latent/vae.config.scaling_factor], dim=2)
+        motion_bucket_id = args.motion_bucket_id
+        fps = args.fps
+        added_time_ids = pipeline._get_add_time_ids(fps, motion_bucket_id, 
+            noise_aug_strength, encoder_hidden_states.dtype, bsz, 1, False)
+        added_time_ids = added_time_ids.to(device)
 
-    motion_bucket_id = args.motion_bucket_id
-    fps = args.fps
-    added_time_ids = pipeline._get_add_time_ids(fps, motion_bucket_id, 
-        noise_aug_strength, encoder_hidden_states.dtype, bsz, 1, False)
-    added_time_ids = added_time_ids.to(device)
+        loss = 0
 
-    loss = 0
-
-    accelerator.wait_for_everyone()
-    model_pred = unet(input_latents, c_noise, encoder_hidden_states=encoder_hidden_states, added_time_ids=added_time_ids).sample
-    predict_x0 = c_out * model_pred + c_skip * noisy_latents 
-    loss += ((predict_x0 - latents)**2 * loss_weight).mean()
+        accelerator.wait_for_everyone()
+        model_pred = unet(input_latents, c_noise, encoder_hidden_states=encoder_hidden_states, added_time_ids=added_time_ids).sample
+        print("model_pred.requires_grad: ", model_pred.requires_grad)
+        predict_x0 = c_out * model_pred + c_skip * noisy_latents 
+        loss += ((predict_x0 - latents)**2 * loss_weight).mean()
 
     return loss
 
@@ -584,7 +587,10 @@ def main(
     freeze_models([vae, text_encoder, unet])
     
     # Enable xformers if available
-    handle_memory_attention(enable_xformers_memory_efficient_attention, enable_torch_2_attn, unet)
+    '''
+    충돌 Lora 설정과
+    '''
+    #handle_memory_attention(enable_xformers_memory_efficient_attention, enable_torch_2_attn, unet)
 
     if scale_lr:
         learning_rate = (
@@ -592,7 +598,8 @@ def main(
         )
 
     # Initialize the optimizer
-    optimizer_cls = get_optimizer(use_8bit_adam)
+    #optimizer_cls = get_optimizer(use_8bit_adam)
+    optimizer_cls = get_optimizer(False)
 
     # Create parameters to optimize over with a condition (if "condition" is true, optimize it)
     extra_unet_params = extra_unet_params if extra_unet_params is not None else {}
@@ -610,11 +617,13 @@ def main(
     
     
     # 1. UNet freeze
+    ## error : https://github.com/d8ahazard/sd_dreambooth_extension/issues/1456#issuecomment-1932484747
+    
     from diffusers.models.attention_processor import LoRAAttnProcessor
     for p in unet.parameters():
         p.requires_grad_(False)
 
-    '''inserted = 0
+    inserted = 0
     for blk_name, blk in unet.named_modules():
         if hasattr(blk, "attn2"):                      # Cross-Attention
             attn = blk.attn2
@@ -626,14 +635,14 @@ def main(
             # temporal - spatial 구분 없이 
             
             
-            (attn2): Attention(
+            '''(attn2): Attention(
                 (to_q): Linear(in_features=320, out_features=320, bias=False)
                 (to_k): Linear(in_features=1024, out_features=320, bias=False)
                 (to_v): Linear(in_features=1024, out_features=320, bias=False)
                 (to_out): ModuleList(
                     (0): Linear(in_features=320, out_features=320, bias=True)
                     (1): Dropout(p=0.0, inplace=False)
-                )
+                )'''
             
             RANK = 16
             lora_proc = LoRAAttnProcessor(hidden_size=hidden, rank=RANK)
@@ -651,11 +660,11 @@ def main(
     print(f"✔  LoRA inserted into {inserted} Cross-Attention modules")
     lora_params = [p for n, p in unet.named_parameters() if "lora" in n.lower()]
     print("trainable LoRA params :", sum(p.numel() for p in lora_params))
-    '''
-    RANK = 16
+    
+    '''RANK = 16
     unet.add_lora_attn_processor(rank=RANK)
     lora_params = [p for n, p in unet.named_parameters() if ".lora_" in n and p.requires_grad]
-    print("LoRA trainable params:", sum(p.numel() for p in lora_params))
+    print("LoRA trainable params:", sum(p.numel() for p in lora_params))'''
     # 학습 대상 = LoRA 행렬
     
     
@@ -682,12 +691,12 @@ def main(
             unet = get_peft_model(unet, peft_config)
         unet.print_trainable_parameters()
 
-    #################################################################################
+    '''#################################################################################
     # prepare optimizer
 
-    '''optim_params = [
-        param_optim(unet, trainable_modules_available, extra_params=extra_unet_params)
-    ]'''
+    #optim_params = [
+    #    param_optim(unet, trainable_modules_available, extra_params=extra_unet_params)
+    #]
     
     optim_params = lora_params
 
@@ -708,7 +717,7 @@ def main(
         optimizer=optimizer,
         num_warmup_steps=lr_warmup_steps * gradient_accumulation_steps,
         num_training_steps=max_train_steps * gradient_accumulation_steps,
-    )
+    )'''
 
     #################################################################################
     #Prepare Dataset
@@ -742,17 +751,63 @@ def main(
         True,
         True,
     )
-
-    unet, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+    
+    '''unet, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
         unet, 
         optimizer, 
         train_dataloader, 
         val_dataloader,
         lr_scheduler, 
+    )'''
+    
+    unet, train_dataloader, val_dataloader = accelerator.prepare(
+        unet, 
+        train_dataloader, 
+        val_dataloader,
     )
     
     lora_params = [p for n,p in unet.named_parameters() if "lora" in n.lower()]
+    for n, p in unet.named_parameters():
+        if "lora" in n.lower():          # or ".lora_" 등 내 코드 규칙에 맞게
+            print(f"{n:60} requires_grad={p.requires_grad}")
+    #################################################################################
+    # prepare optimizer
 
+    #optim_params = [
+    #    param_optim(unet, trainable_modules_available, extra_params=extra_unet_params)
+    #]
+    
+    optim_params = lora_params
+
+    #params = create_optimizer_params(optim_params, learning_rate)
+    
+    # Create Optimizer
+    optimizer = optimizer_cls(
+        optim_params,
+        lr=learning_rate,
+        betas=(adam_beta1, adam_beta2),
+        weight_decay=adam_weight_decay,
+        eps=adam_epsilon,
+    )
+
+    # Scheduler
+    lr_scheduler = get_scheduler(
+        lr_scheduler,
+        optimizer=optimizer,
+        num_warmup_steps=lr_warmup_steps * gradient_accumulation_steps,
+        num_training_steps=max_train_steps * gradient_accumulation_steps,
+    )
+    
+    optimizer, lr_scheduler = accelerator.prepare(
+    optimizer,
+    lr_scheduler
+    )
+    
+    num_trainable = sum(p.numel() for p in unet.parameters() if p.requires_grad)
+    print("trainable parameters:", num_trainable)
+
+    
+    
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
     weight_dtype = is_mixed_precision(accelerator)
@@ -816,6 +871,7 @@ def main(
                 train_loss += avg_loss.item() / gradient_accumulation_steps
 
                 # Backpropagate
+                print("loss.requires_grad:", loss.requires_grad)
                 accelerator.backward(loss)
                 #params_to_clip = unet.parameters()
                 #params_to_clip = lora_params
@@ -936,6 +992,7 @@ def validation(batch, accelerator, pipeline, unet, tokenizer, text_encoder, imag
 
     accelerator.wait_for_everyone()
     model_pred = unet(input_latents, c_noise, encoder_hidden_states=encoder_hidden_states, added_time_ids=added_time_ids).sample
+    assert model_pred.requires_grad, "graph cut before loss"
     predict_x0 = c_out * model_pred + c_skip * noisy_latents 
     loss += ((predict_x0 - latents)**2 * loss_weight).mean()
 

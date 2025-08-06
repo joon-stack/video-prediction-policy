@@ -51,6 +51,9 @@ def encode_text(texts, tokenizer, text_encoder, position_encode=True, max_length
 
         # 최종 shape: (batch, seq_len, 1024) = text_embed x2
         encoder_hidden_states = torch.cat([encoder_hidden_states, encoder_hidden_states], dim=-1)
+        
+        ## 추가 
+        encoder_hidden_states = encoder_hidden_states[:, :1]   # (B,1,1024)
     return encoder_hidden_states
 
 # ------------------------------

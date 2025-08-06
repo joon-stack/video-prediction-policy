@@ -1,0 +1,102 @@
+pretrained_model_path: /shared/s2/lab01/youngjoonjeong/stable_diffusion/svd-robot
+output_dir: /home/s2/gihoonkim/gihoon/shared_gihoon/videodiff/robodiff/video-prediction-policy/results
+train_args:
+  debug: false
+  use_lora: true
+  lora_model_path: null
+  lora_rank: 16
+  project_name: svd_xhand_cleancode
+  run_name: clean_code
+  clip_model_path: /shared/s2/lab01/youngjoonjeong/clip/clip-vit-base-patch32
+  clip_token_length: 20
+  position_encode: false
+  clip_img_size: 224
+  use_img_cond: false
+  annotation_name: annotation
+  dataset_dir: /shared/s2/lab01/youngjoonjeong/vpp
+  dataset: libero
+  prob:
+  - 1.0
+  tie_weight: true
+  normalize: true
+  pre_encode: true
+  num_workers: 16
+  video_size:
+  - 256
+  - 256
+  sequence_length: 16
+  only_one_clip: true
+  log_every: 100
+  global_seed: 12345
+  do_evaluate: false
+  evaluate_checkpoint: false
+  resume_from_checkpoint: false
+  validation_num: 32
+  video_num: 3
+  num_frames: 16
+  width: 256
+  height: 256
+  sample_preview: true
+  num_inference_steps: 30
+  guidance_scale: 7.5
+  fps: 7
+  motion_bucket_id: 127
+  decode_chunk_size: 7
+shuffle: true
+validation_steps: 1000
+trainable_modules:
+- all
+- attn1
+- attn2
+- conv_in
+- temp_conv
+extra_unet_params: null
+extra_text_encoder_params: null
+train_batch_size: 1
+max_train_steps: 500000
+learning_rate: 5.0e-06
+scale_lr: false
+lr_scheduler: constant
+lr_warmup_steps: 0
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0
+adam_epsilon: 1.0e-08
+max_grad_norm: 1.0
+gradient_accumulation_steps: 1
+gradient_checkpointing: true
+text_encoder_gradient_checkpointing: false
+checkpointing_steps: 10000
+resume_from_checkpoint: null
+resume_step: null
+mixed_precision: fp16
+use_8bit_adam: true
+enable_xformers_memory_efficient_attention: false
+enable_torch_2_attn: true
+seed: 6
+use_offset_noise: false
+rescale_schedule: false
+offset_noise_strength: 0.1
+extend_dataset: false
+cache_latents: false
+cached_latent_dir: null
+save_pretrained_model: true
+logger_type: tensorboard
+kwargs:
+  motion_mask: false
+  motion_strength: false
+  dataset_types:
+  - video_blip
+  train_text_encoder: false
+  lora_version: cloneofsimo
+  use_unet_lora: false
+  use_text_lora: false
+  lora_unet_dropout: 0.1
+  lora_text_dropout: 0.1
+  save_lora_for_webui: true
+  only_lora_for_webui: false
+  unet_lora_modules:
+  - UNet3DConditionModel
+  text_encoder_lora_modules:
+  - CLIPEncoderLayer
+  trainable_text_modules: null

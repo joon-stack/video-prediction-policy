@@ -303,17 +303,26 @@ def save_pipe(
     else:
         save_path = output_dir
 
-    unet_out = copy.deepcopy(unet)
+    # 1) DDP 래퍼 제거 (가능한 경우)
+    if accelerator is not None and hasattr(accelerator, "unwrap_model"):
+        unet_to_save = accelerator.unwrap_model(unet)
+    else:
+        unet_to_save = unet   # 이미 원본 모듈
+
+    # 2) LoRA 파라미터만 저장
+    unet_to_save.save_attn_procs(save_path)
+    
+    '''
     pipeline = StableVideoDiffusionPipeline.from_pretrained(
         path, unet=unet_out).to(torch_dtype=torch.float32)
 
     if save_pretrained_model:
-        pipeline.save_pretrained(save_path)
+        pipeline.save_pretrained(save_path)'''
 
     logger.info(f"Saved model at {save_path} on step {global_step}")
     
-    del pipeline
-    del unet_out
+    #del pipeline
+    #del unet_out
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -396,7 +405,8 @@ def encode_text(texts, tokenizer, text_encoder, img_cond=None, img_cond_mask=Non
             outputs = text_encoder(**inputs)
             encoder_hidden_states = outputs.last_hidden_state # (batch, 30, 512)
             assert encoder_hidden_states.shape[1:] == (32,1024)
-
+            
+        encoder_hidden_states = encoder_hidden_states[:, :1]   # (B,1,1024)
     return encoder_hidden_states
 
 def finetune_unet(batch, accelerator, pipeline, unet, tokenizer, text_encoder, image_encoder,args,P_mean=0.7, P_std=1.6):
@@ -589,16 +599,60 @@ def main(
 
     trainable_modules_available = trainable_modules is not None
 
-    # Unfreeze UNET Layers
-    '''if trainable_modules_available:
+    '''# Unfreeze UNET Layers
+    if trainable_modules_available:
         unet.train()
         handle_trainable_modules(
             unet, 
             trainable_modules, 
             is_enabled=True,
-        )
-    '''
+        )'''
     
+    
+    # 1. UNet freeze
+    from diffusers.models.attention_processor import LoRAAttnProcessor
+    for p in unet.parameters():
+        p.requires_grad_(False)
+
+    inserted = 0
+    for blk_name, blk in unet.named_modules():
+        if hasattr(blk, "attn2"):                      # Cross-Attention
+            attn = blk.attn2
+
+            # Q-proj 차원
+            q_proj = getattr(attn, "to_q", None) or getattr(attn, "q_proj", None)
+            hidden = q_proj.in_features # 입력을 차원을 받아오기 위함! 학습은 k q c out 다 해당함 
+            
+            # temporal - spatial 구분 없이 
+            
+            '''
+            (attn2): Attention(
+                (to_q): Linear(in_features=320, out_features=320, bias=False)
+                (to_k): Linear(in_features=1024, out_features=320, bias=False)
+                (to_v): Linear(in_features=1024, out_features=320, bias=False)
+                (to_out): ModuleList(
+                    (0): Linear(in_features=320, out_features=320, bias=True)
+                    (1): Dropout(p=0.0, inplace=False)
+                )
+            '''
+            RANK = 16
+            lora_proc = LoRAAttnProcessor(hidden_size=hidden, rank=RANK)
+
+            # diffusers 버전에 따라 메서드 선택
+            if hasattr(attn, "set_attn_processor"):
+                attn.set_attn_processor(lora_proc)
+            elif hasattr(attn, "set_processor"):
+                attn.set_processor(lora_proc)
+            else:
+                raise RuntimeError("이 어텐션 모듈은 LoRA 주입 메서드를 지원하지 않습니다.")
+
+            inserted += 1
+
+    print(f"✔  LoRA inserted into {inserted} Cross-Attention modules")
+
+    # 학습 대상 = LoRA 행렬
+    lora_params = [p for n, p in unet.named_parameters() if "lora" in n.lower()]
+    print("trainable LoRA params :", sum(p.numel() for p in lora_params))
     
     #################################################################################
     # if use lora, prepare lora model
@@ -626,15 +680,17 @@ def main(
     #################################################################################
     # prepare optimizer
 
-    optim_params = [
+    '''optim_params = [
         param_optim(unet, trainable_modules_available, extra_params=extra_unet_params)
-    ]
+    ]'''
+    
+    optim_params = lora_params
 
-    params = create_optimizer_params(optim_params, learning_rate)
+    #params = create_optimizer_params(optim_params, learning_rate)
     
     # Create Optimizer
     optimizer = optimizer_cls(
-        params,
+        optim_params,
         lr=learning_rate,
         betas=(adam_beta1, adam_beta2),
         weight_decay=adam_weight_decay,
@@ -689,7 +745,8 @@ def main(
         val_dataloader,
         lr_scheduler, 
     )
-
+    
+    lora_params = [p for n,p in unet.named_parameters() if "lora" in n.lower()]
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
@@ -755,9 +812,11 @@ def main(
 
                 # Backpropagate
                 accelerator.backward(loss)
-                params_to_clip = unet.parameters()
-                accelerator.clip_grad_norm_(params_to_clip, max_grad_norm)
-            
+                #params_to_clip = unet.parameters()
+                #params_to_clip = lora_params
+                #accelerator.clip_grad_norm_(params_to_clip, max_grad_norm)
+                accelerator.clip_grad_norm_(lora_params, max_grad_norm)
+                
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)

@@ -3,7 +3,7 @@ models/lama.ckpt
 .vscode/
 models/model_scope_diffusers/
 text-to-video-ms-1.7b/
-results/
+results*/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

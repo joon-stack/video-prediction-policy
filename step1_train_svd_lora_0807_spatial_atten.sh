@@ -1,15 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=svd_ft_lora_s                 # Submit a job named "example"
-#SBATCH --nodes=1                             # Using 1 node
-#SBATCH --gres=gpu:1                         # Using 1 gpu
-#SBATCH --time=4-00:00:00                     # 1 hour timelimit
-#SBATCH --mem=50GB                         # Using 10GB CPU Memory
-#SBATCH --partition=laal5                     # Using "b" partition 
-#SBATCH --cpus-per-task=12                     # Using 4 maximum processor
-#SBATCH --output=svd_ft_lora_s_%j.log      # 로그 파일 이름에 job ID가 포함되도록 설정
+#SBATCH --job-name=svd_ft_lora_s            # Job name에 job ID가 포함되도록 설정
+#SBATCH --nodes=1                      # Number of nodes
+#SBATCH --ntasks-per-node=1            # Number of tasks per node (1 task per node)
+#SBATCH --gres=gpu:1                   # Number of GPUs per node
+#SBATCH --cpus-per-task=16              # Number of CPU cores per task
+#SBATCH --time=0-12:00:00               # Maximum time limit for the job
+#SBATCH --partition=P2                 # Use the correct partition (e.g., P2)
+#SBATCH --mem=50G
+#SBATCH --output=svd_ft_lora_s%j.log      # 로그 파일 이름에 job ID가 포함되도록 설정
 
 source ${HOME}/.bashrc
 source ${HOME}/anaconda3/bin/activate
 conda activate vpp
 
-accelerate launch --main_process_port 29506 --num_processes 1 step1_train_svd_lora_0807_spatial_atten.py --config video_conf/train_libero_svd_lora_spatial.yaml
+#accelerate launch --main_process_port 29506 --num_processes 1 step1_train_svd_lora_0807_spatial_atten.py --config video_conf/train_libero_svd_lora_spatial.yaml
+accelerate launch --main_process_port 29506 --num_processes 1 step1_train_svd_lora_0807_spatial_atten.py --config video_conf/train_libero_svd_lora_spatial.yaml -- resume_from_checkpoint=/home/s2/gihoonkim/gihoon/shared_gihoon/videodiff/robodiff/video-prediction-policy/results_spatial/train_2025-08-07T09-47-55/checkpoint-190000

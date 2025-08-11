@@ -777,6 +777,73 @@ def main(
         models_to_cast.append(image_encoder)
     cast_to_gpu_and_type(models_to_cast, accelerator.device, weight_dtype)
     
+    # -------------------- RESUME (explicit checkpoint path) --------------------
+    # 사용자가 --resume_from_checkpoint=/.../checkpoint-XXXX 형태로 넘겨준다고 가정
+    global_step = 0
+    first_epoch = 0
+    _resume_batches_to_skip = 0  # dataloader 배치 단위로 스킵할 개수
+
+    if resume_from_checkpoint is not None:
+        assert os.path.isdir(resume_from_checkpoint), f"Resume path not found: {resume_from_checkpoint}"
+
+        # (1) 모델 가중치 로드: 저장 당시 save_pretrained로 저장된 파이프라인에서 UNet만 꺼내 현재 UNet(PEFT 래핑)으로 주입
+        try:
+            resumed_pipe = StableVideoDiffusionPipeline.from_pretrained(resume_from_checkpoint)
+            # PEFT 래핑 유무/구성이 달라도 동작하도록 strict=False
+            #unet.load_state_dict(resumed_pipe.unet.state_dict(), strict=False)
+            accelerator.unwrap_model(unet).load_state_dict(resumed_pipe.unet.state_dict(), strict=False)
+            del resumed_pipe
+            logger.info(f"[RESUME] Loaded UNet weights from {resume_from_checkpoint}")
+        except Exception as e:
+            logger.warning(f"[RESUME] UNet load failed: {e}")
+
+        # (2) optimizer / scheduler / global_step 로드
+        state_path = os.path.join(resume_from_checkpoint, "training_state.pt")
+        if os.path.exists(state_path):
+            ckpt = torch.load(state_path, map_location="cpu")
+            try:
+                optimizer.load_state_dict(ckpt["optimizer"])
+                lr_scheduler.load_state_dict(ckpt["lr_scheduler"])
+            except Exception as e:
+                logger.warning(f"[RESUME] Optimizer/LR scheduler load failed: {e}")
+
+            global_step = int(ckpt.get("global_step", 0))
+
+            # 에폭/배치 스킵 계산 (accumulation 반영)
+            num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
+            first_epoch = global_step // num_update_steps_per_epoch
+            _resume_batches_to_skip = (global_step % num_update_steps_per_epoch) * gradient_accumulation_steps
+
+            logger.info(
+                f"[RESUME] global_step={global_step}, first_epoch={first_epoch}, "
+                f"skip(batches)={_resume_batches_to_skip}"
+            )
+        else:
+            logger.warning(f"[RESUME] training_state.pt not found in {resume_from_checkpoint}; "
+                           "optimizer/scheduler/global_step will NOT be restored.")
+
+        # 기존 스킵 로직이 사용하는 변수에 반영
+        resume_step = _resume_batches_to_skip
+    
+    
+    total_batch_size = train_batch_size * accelerator.num_processes * gradient_accumulation_steps
+    num_train_epochs = math.ceil(max_train_steps * gradient_accumulation_steps*total_batch_size / len(train_dataloader))
+
+    logger.info("***** Running training *****")
+    logger.info(f"  Num examples = {len(train_dataset)}")
+    logger.info(f"  Num Epochs = {num_train_epochs}")
+    logger.info(f"  Instantaneous batch size per device = {train_batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Gradient Accumulation steps = {gradient_accumulation_steps}")
+    logger.info(f"  Total optimization steps = {max_train_steps}")
+
+    train_loss = 0.0
+    progress_bar = tqdm(range(global_step, max_train_steps), disable=not accelerator.is_local_main_process)
+    progress_bar.set_description("Steps")
+    
+    # -------------------- RESUME END --------------------
+    
+    
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
@@ -796,13 +863,13 @@ def main(
     logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {max_train_steps}")
-    global_step = 0
-    first_epoch = 0
+    #global_step = 0
+    #first_epoch = 0
     train_loss = 0.0
 
     # Only show the progress bar once on each machine.
-    progress_bar = tqdm(range(global_step, max_train_steps), disable=not accelerator.is_local_main_process)
-    progress_bar.set_description("Steps")
+    #progress_bar = tqdm(range(global_step, max_train_steps), disable=not accelerator.is_local_main_process)
+    #progress_bar.set_description("Steps")
      
     # *Potentially* Fixes gradient checkpointing training.
     # See: https://github.com/prigoyal/pytorch_memonger/blob/master/tutorial/Checkpointing_for_PyTorch_models.ipynb
